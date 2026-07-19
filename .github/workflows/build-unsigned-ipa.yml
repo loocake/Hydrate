@@ -1,0 +1,77 @@
+name: Build Unsigned IPA
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "Hydrate/**"
+      - "Hydrate.xcodeproj/**"
+      - ".github/workflows/build-unsigned-ipa.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: xcode-27
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Show Xcode environment
+        run: |
+          set -euxo pipefail
+          xcodebuild -version
+          xcodebuild -showsdks
+
+      - name: Resolve Swift package dependencies
+        run: |
+          set -euxo pipefail
+          xcodebuild \
+            -resolvePackageDependencies \
+            -project Hydrate.xcodeproj \
+            -scheme Hydrate
+
+      - name: Build unsigned app
+        run: |
+          set -euxo pipefail
+          rm -rf "$RUNNER_TEMP/HydrateDerivedData" "$RUNNER_TEMP/HydratePayload"
+          xcodebuild \
+            -project Hydrate.xcodeproj \
+            -scheme Hydrate \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/HydrateDerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            DEVELOPMENT_TEAM='' \
+            clean build
+
+      - name: Package unsigned IPA
+        run: |
+          set -euxo pipefail
+          APP_PATH="$RUNNER_TEMP/HydrateDerivedData/Build/Products/Release-iphoneos/Hydrate.app"
+          test -d "$APP_PATH"
+          mkdir -p "$RUNNER_TEMP/HydratePayload/Payload"
+          cp -R "$APP_PATH" "$RUNNER_TEMP/HydratePayload/Payload/"
+          cd "$RUNNER_TEMP/HydratePayload"
+          /usr/bin/zip -qry "$GITHUB_WORKSPACE/Hydrate-unsigned.ipa" Payload
+          /usr/bin/unzip -t "$GITHUB_WORKSPACE/Hydrate-unsigned.ipa"
+          /usr/bin/shasum -a 256 "$GITHUB_WORKSPACE/Hydrate-unsigned.ipa" \
+            | tee "$GITHUB_WORKSPACE/Hydrate-unsigned.ipa.sha256"
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Hydrate-unsigned-ipa
+          path: |
+            Hydrate-unsigned.ipa
+            Hydrate-unsigned.ipa.sha256
+          if-no-files-found: error
+          retention-days: 30
